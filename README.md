@@ -49,7 +49,7 @@ cat my_corpus.txt | ./microgpt -dataset - -save model.json
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-dataset` | `input.txt` | Path to training data (one entry per line), or `-` for stdin |
+| `-dataset` | `input.txt` | Path to training data, or a well-known dataset name (see `-list-datasets`), or `-` for stdin |
 | `-steps` | `1000` | Number of training steps |
 | `-temp` | `0.5` | Sampling temperature (0, 1] |
 | `-samples` | `20` | Number of samples to generate |
@@ -57,6 +57,33 @@ cat my_corpus.txt | ./microgpt -dataset - -save model.json
 | `-load` | | Load weights from this JSON file (skip training) |
 | `-mode` | `train` | `train` (train + infer), `infer` (generate only), or `serve` (HTTP server) |
 | `-addr` | `:8080` | Address for the HTTP server (used with `-mode serve`) |
+| `-list-datasets` | | List available well-known datasets and exit |
+
+## Well-Known Datasets
+
+microgpt-go ships with a registry of well-known datasets that can be referenced by
+name. When you pass a well-known name to `-dataset`, the file is automatically
+downloaded on first use and cached in `~/.cache/microgpt-go/` so subsequent runs
+skip the download.
+
+```bash
+# List all available datasets
+./microgpt -list-datasets
+
+# Train on the built-in names dataset (cached after first download)
+./microgpt -dataset names -steps 1000
+
+# Train on English dictionary words
+./microgpt -dataset words -steps 2000 -save word_model.json
+```
+
+| Name | Category | Description |
+|------|----------|-------------|
+| `names` | names | 32K human first names (from Karpathy's makemore) |
+| `words` | vocabulary | 370K English dictionary words |
+
+The default `-dataset input.txt` behaviour is unchanged — if `input.txt` doesn't
+exist, the names dataset is downloaded to it directly (no caching).
 
 ## HTTP Inference Server
 
