@@ -37,6 +37,10 @@ The model is a single-layer transformer with:
 - ReLU activation (instead of GeLU)
 - No biases
 
+## Use Cases and Evolution
+
+For a detailed discussion of practical use cases and ideas for evolving microgpt-go into a real-world application, see [Use Cases and Evolution](docs/USE_CASES_AND_EVOLUTION.md).
+
 ## Credits
 
 Based on the original Python implementation by [Andrej Karpathy](https://github.com/karpathy).
