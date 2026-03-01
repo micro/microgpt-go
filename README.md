@@ -135,6 +135,10 @@ The model is a single-layer transformer with:
 
 For a detailed discussion of practical use cases, real-world datasets, and ideas for evolving microgpt-go, see [Use Cases and Evolution](docs/USE_CASES_AND_EVOLUTION.md).
 
+## Microservices Integration
+
+For patterns on periodic API ingestion, per-service models, and integration with platforms like [Mu](https://github.com/micro/mu), see [Microservices Integration](docs/MICROSERVICES.md).
+
 ## AI Assistant Guide
 
 See [CLAUDE.md](CLAUDE.md) for project guidance when working with AI coding assistants.
