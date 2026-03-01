@@ -365,7 +365,7 @@ func downloadDefaultDataset(path string) error {
 		return nil
 	}
 	namesURL := "https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt"
-	resp, err := http.Get(namesURL) // #nosec G107 -- URL is a hardcoded constant
+	resp, err := http.Get(namesURL)
 	if err != nil {
 		return fmt.Errorf("downloading dataset: %w", err)
 	}
@@ -710,6 +710,15 @@ func main() {
 		nHead     = 4
 	)
 
+	// Validate mode flag
+	switch *mode {
+	case "train", "infer", "serve":
+		// valid
+	default:
+		fmt.Fprintf(os.Stderr, "Error: unknown mode %q (must be train, infer, or serve)\n", *mode)
+		os.Exit(1)
+	}
+
 	if *loadPath != "" {
 		// Load model from file
 		var err error
@@ -722,9 +731,8 @@ func main() {
 	}
 
 	BOS := len(uchars) // token id for Beginning of Sequence
-	vocabSize := len(uchars) + 1
 
-	if *mode == "train" || (*mode != "infer" && *mode != "serve") {
+	if *mode == "train" {
 		// --- Dataset ---
 		var docs []string
 		if *dataset == "-" {
@@ -759,7 +767,7 @@ func main() {
 			// Build tokenizer from training data
 			uchars, charToIdx = buildTokenizer(docs)
 			BOS = len(uchars)
-			vocabSize = len(uchars) + 1
+			vocabSize := len(uchars) + 1
 			fmt.Printf("vocab size: %d\n", vocabSize)
 
 			// Initialize fresh weights

@@ -375,8 +375,7 @@ func TestFlattenParams(t *testing.T) {
 	stateDict := initWeights(rng, 5, 1, 4, 4)
 	params := flattenParams(stateDict, 1)
 
-	// Count expected params: wte(5*4) + wpe(4*4) + lm_head(5*4) + 6 matrices(4*4 each) = 20+16+20+96 = 152
-	// Actually: attn_wq(4*4)=16, attn_wk(4*4)=16, attn_wv(4*4)=16, attn_wo(4*4)=16, mlp_fc1(16*4)=64, mlp_fc2(4*16)=64
+	// Expected params: wte(5*4) + wpe(4*4) + lm_head(5*4) + attn_wq(4*4) + attn_wk(4*4) + attn_wv(4*4) + attn_wo(4*4) + mlp_fc1(16*4) + mlp_fc2(4*16)
 	expected := 5*4 + 4*4 + 5*4 + 4*4 + 4*4 + 4*4 + 4*4 + 4*16 + 4*16
 	if len(params) != expected {
 		t.Errorf("expected %d params, got %d", expected, len(params))
@@ -476,9 +475,15 @@ func TestGenerateSample(t *testing.T) {
 	gpt := makeGPT(stateDict, nLayer, nEmbd, nHead)
 	sample := generateSample(rng, gpt, uchars, BOS, nLayer, blockSize, 0.5)
 
-	// Should produce some output (might be empty if BOS is generated immediately)
 	if len(sample) > blockSize {
 		t.Errorf("sample length %d exceeds block size %d", len(sample), blockSize)
+	}
+	// All characters in output should be from the vocabulary
+	validChars := map[rune]bool{'a': true, 'b': true, 'c': true, 'd': true}
+	for _, ch := range sample {
+		if !validChars[ch] {
+			t.Errorf("sample contains invalid character %c", ch)
+		}
 	}
 }
 
