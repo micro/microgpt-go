@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"math/rand"
+	"strings"
 	"testing"
 )
 
@@ -287,5 +288,235 @@ func TestMatrix(t *testing.T) {
 				t.Errorf("matrix value %f seems too large for std=0.08", v.data)
 			}
 		}
+	}
+}
+
+func TestBuildTokenizer(t *testing.T) {
+	docs := []string{"hello", "world"}
+	uchars, charToIdx := buildTokenizer(docs)
+
+	// Should contain all unique characters
+	expected := map[rune]bool{'h': true, 'e': true, 'l': true, 'o': true, 'w': true, 'r': true, 'd': true}
+	if len(uchars) != len(expected) {
+		t.Errorf("expected %d unique chars, got %d", len(expected), len(uchars))
+	}
+	for _, ch := range uchars {
+		if !expected[ch] {
+			t.Errorf("unexpected char %c in uchars", ch)
+		}
+	}
+
+	// Should be sorted
+	for i := 1; i < len(uchars); i++ {
+		if uchars[i] <= uchars[i-1] {
+			t.Errorf("uchars not sorted: %c <= %c", uchars[i], uchars[i-1])
+		}
+	}
+
+	// charToIdx should map correctly
+	for i, ch := range uchars {
+		if charToIdx[ch] != i {
+			t.Errorf("charToIdx[%c] = %d, expected %d", ch, charToIdx[ch], i)
+		}
+	}
+}
+
+func TestReadLines(t *testing.T) {
+	input := "hello\n  world  \n\n  foo  \n"
+	r := strings.NewReader(input)
+	docs, err := readLines(r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 3 {
+		t.Fatalf("expected 3 docs, got %d", len(docs))
+	}
+	if docs[0] != "hello" || docs[1] != "world" || docs[2] != "foo" {
+		t.Errorf("unexpected docs: %v", docs)
+	}
+}
+
+func TestParamKeys(t *testing.T) {
+	keys := paramKeys(2)
+	expected := []string{
+		"wte", "wpe", "lm_head",
+		"layer0.attn_wq", "layer0.attn_wk", "layer0.attn_wv", "layer0.attn_wo", "layer0.mlp_fc1", "layer0.mlp_fc2",
+		"layer1.attn_wq", "layer1.attn_wk", "layer1.attn_wv", "layer1.attn_wo", "layer1.mlp_fc1", "layer1.mlp_fc2",
+	}
+	if len(keys) != len(expected) {
+		t.Fatalf("expected %d keys, got %d", len(expected), len(keys))
+	}
+	for i, k := range keys {
+		if k != expected[i] {
+			t.Errorf("key %d: expected %s, got %s", i, expected[i], k)
+		}
+	}
+}
+
+func TestInitWeights(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	stateDict := initWeights(rng, 5, 1, 4, 4)
+
+	// Check that all expected keys exist
+	for _, key := range paramKeys(1) {
+		if _, ok := stateDict[key]; !ok {
+			t.Errorf("missing key %s in stateDict", key)
+		}
+	}
+
+	// Check wte dimensions
+	if len(stateDict["wte"]) != 5 || len(stateDict["wte"][0]) != 4 {
+		t.Errorf("wte has wrong dimensions: %dx%d", len(stateDict["wte"]), len(stateDict["wte"][0]))
+	}
+}
+
+func TestFlattenParams(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	stateDict := initWeights(rng, 5, 1, 4, 4)
+	params := flattenParams(stateDict, 1)
+
+	// Count expected params: wte(5*4) + wpe(4*4) + lm_head(5*4) + 6 matrices(4*4 each) = 20+16+20+96 = 152
+	// Actually: attn_wq(4*4)=16, attn_wk(4*4)=16, attn_wv(4*4)=16, attn_wo(4*4)=16, mlp_fc1(16*4)=64, mlp_fc2(4*16)=64
+	expected := 5*4 + 4*4 + 5*4 + 4*4 + 4*4 + 4*4 + 4*4 + 4*16 + 4*16
+	if len(params) != expected {
+		t.Errorf("expected %d params, got %d", expected, len(params))
+	}
+}
+
+func TestSaveLoadModel(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	nLayer, nEmbd, blockSize, nHead := 1, 4, 4, 2
+	vocabSize := 5
+	stateDict := initWeights(rng, vocabSize, nLayer, nEmbd, blockSize)
+	uchars := []rune{'a', 'b', 'c', 'd'}
+
+	path := t.TempDir() + "/model.json"
+	err := saveModel(path, stateDict, uchars, nLayer, nEmbd, blockSize, nHead)
+	if err != nil {
+		t.Fatalf("saveModel error: %v", err)
+	}
+
+	loaded, loadedUchars, loadedCharToIdx, lNLayer, lNEmbd, lBlockSize, lNHead, err := loadModel(path)
+	if err != nil {
+		t.Fatalf("loadModel error: %v", err)
+	}
+
+	if lNLayer != nLayer || lNEmbd != nEmbd || lBlockSize != blockSize || lNHead != nHead {
+		t.Errorf("hyperparams mismatch: got (%d,%d,%d,%d), expected (%d,%d,%d,%d)",
+			lNLayer, lNEmbd, lBlockSize, lNHead, nLayer, nEmbd, blockSize, nHead)
+	}
+
+	if len(loadedUchars) != len(uchars) {
+		t.Fatalf("vocab size mismatch: got %d, expected %d", len(loadedUchars), len(uchars))
+	}
+	for i, ch := range loadedUchars {
+		if ch != uchars[i] {
+			t.Errorf("uchars[%d]: got %c, expected %c", i, ch, uchars[i])
+		}
+	}
+
+	// Verify charToIdx is correct
+	for i, ch := range loadedUchars {
+		if loadedCharToIdx[ch] != i {
+			t.Errorf("charToIdx[%c] = %d, expected %d", ch, loadedCharToIdx[ch], i)
+		}
+	}
+
+	// Verify weights match
+	for _, key := range paramKeys(nLayer) {
+		orig := stateDict[key]
+		load := loaded[key]
+		if len(orig) != len(load) {
+			t.Fatalf("key %s: row count mismatch %d vs %d", key, len(orig), len(load))
+		}
+		for i := range orig {
+			for j := range orig[i] {
+				if math.Abs(orig[i][j].data-load[i][j].data) > 1e-10 {
+					t.Errorf("key %s[%d][%d]: %.10f vs %.10f", key, i, j, orig[i][j].data, load[i][j].data)
+				}
+			}
+		}
+	}
+}
+
+func TestMakeGPT(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	nLayer, nEmbd, blockSize, nHead := 1, 4, 4, 2
+	vocabSize := 5
+	stateDict := initWeights(rng, vocabSize, nLayer, nEmbd, blockSize)
+
+	gpt := makeGPT(stateDict, nLayer, nEmbd, nHead)
+
+	keys := make([][][]*Value, nLayer)
+	vals := make([][][]*Value, nLayer)
+	for i := 0; i < nLayer; i++ {
+		keys[i] = make([][]*Value, 0)
+		vals[i] = make([][]*Value, 0)
+	}
+
+	logits := gpt(0, 0, keys, vals)
+	if len(logits) != vocabSize {
+		t.Errorf("expected %d logits, got %d", vocabSize, len(logits))
+	}
+	for i, l := range logits {
+		if math.IsNaN(l.data) || math.IsInf(l.data, 0) {
+			t.Errorf("logit %d is NaN or Inf", i)
+		}
+	}
+}
+
+func TestGenerateSample(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	nLayer, nEmbd, blockSize, nHead := 1, 4, 4, 2
+	vocabSize := 5
+	stateDict := initWeights(rng, vocabSize, nLayer, nEmbd, blockSize)
+	uchars := []rune{'a', 'b', 'c', 'd'}
+	BOS := len(uchars)
+
+	gpt := makeGPT(stateDict, nLayer, nEmbd, nHead)
+	sample := generateSample(rng, gpt, uchars, BOS, nLayer, blockSize, 0.5)
+
+	// Should produce some output (might be empty if BOS is generated immediately)
+	if len(sample) > blockSize {
+		t.Errorf("sample length %d exceeds block size %d", len(sample), blockSize)
+	}
+}
+
+func TestGenerateSampleWithPrompt(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	nLayer, nEmbd, blockSize, nHead := 1, 4, 4, 2
+	vocabSize := 5
+	stateDict := initWeights(rng, vocabSize, nLayer, nEmbd, blockSize)
+	uchars := []rune{'a', 'b', 'c', 'd'}
+	charToIdx := map[rune]int{'a': 0, 'b': 1, 'c': 2, 'd': 3}
+	BOS := len(uchars)
+
+	gpt := makeGPT(stateDict, nLayer, nEmbd, nHead)
+	sample := generateSampleWithPrompt(rng, gpt, uchars, charToIdx, BOS, nLayer, blockSize, 0.5, "ab", blockSize)
+
+	// Should start with the prompt
+	if len(sample) < 2 || sample[:2] != "ab" {
+		t.Errorf("expected sample to start with 'ab', got '%s'", sample)
+	}
+}
+
+func TestTrainModel(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	docs := []string{"ab", "cd", "ab", "cd"}
+	uchars, charToIdx := buildTokenizer(docs)
+	BOS := len(uchars)
+	vocabSize := len(uchars) + 1
+
+	nLayer, nEmbd, blockSize, nHead := 1, 4, 4, 2
+	stateDict := initWeights(rng, vocabSize, nLayer, nEmbd, blockSize)
+	params := flattenParams(stateDict, nLayer)
+	gpt := makeGPT(stateDict, nLayer, nEmbd, nHead)
+
+	// Run a few training steps
+	loss := trainModel(gpt, params, docs, charToIdx, BOS, nLayer, blockSize, 5)
+
+	// Loss should be a finite positive number
+	if math.IsNaN(loss) || math.IsInf(loss, 0) || loss < 0 {
+		t.Errorf("unexpected loss value: %f", loss)
 	}
 }
