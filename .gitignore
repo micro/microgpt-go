@@ -4,3 +4,6 @@ microgpt
 
 # Dataset (downloaded at runtime)
 input.txt
+
+# Saved models
+*.json
