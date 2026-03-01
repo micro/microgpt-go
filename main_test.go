@@ -3,6 +3,10 @@ package main
 import (
 	"math"
 	"math/rand"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -524,4 +528,154 @@ func TestTrainModel(t *testing.T) {
 	if math.IsNaN(loss) || math.IsInf(loss, 0) || loss < 0 {
 		t.Errorf("unexpected loss value: %f", loss)
 	}
+}
+
+func TestWellKnownDatasetsRegistry(t *testing.T) {
+	// Every entry must have Name, URL, Category, and Description.
+	if len(wellKnownDatasets) == 0 {
+		t.Fatal("wellKnownDatasets registry is empty")
+	}
+	for key, ds := range wellKnownDatasets {
+		if ds.Name != key {
+			t.Errorf("dataset %q: Name %q does not match map key", key, ds.Name)
+		}
+		if ds.URL == "" {
+			t.Errorf("dataset %q: URL is empty", key)
+		}
+		if ds.Category == "" {
+			t.Errorf("dataset %q: Category is empty", key)
+		}
+		if ds.Description == "" {
+			t.Errorf("dataset %q: Description is empty", key)
+		}
+	}
+}
+
+func TestDatasetCacheDir(t *testing.T) {
+	dir, err := datasetCacheDir()
+	if err != nil {
+		t.Fatalf("datasetCacheDir: %v", err)
+	}
+	if dir == "" {
+		t.Fatal("datasetCacheDir returned empty string")
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("cache dir does not exist: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("cache dir is not a directory: %s", dir)
+	}
+}
+
+func TestDownloadToFile(t *testing.T) {
+	// Set up a local HTTP server to avoid real network calls in tests.
+	content := "alice\nbob\ncharlie\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(content))
+	}))
+	defer srv.Close()
+
+	dst := filepath.Join(t.TempDir(), "test_download.txt")
+	if err := downloadToFile(srv.URL, dst); err != nil {
+		t.Fatalf("downloadToFile: %v", err)
+	}
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("reading downloaded file: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("downloaded content mismatch: got %q, want %q", string(got), content)
+	}
+}
+
+func TestDownloadToFileHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	dst := filepath.Join(t.TempDir(), "should_not_exist.txt")
+	err := downloadToFile(srv.URL, dst)
+	if err == nil {
+		t.Fatal("expected error for HTTP 404, got nil")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("error should mention HTTP status: %v", err)
+	}
+	// Partial file should have been cleaned up
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Error("partial file should have been removed after HTTP error")
+	}
+}
+
+func TestResolveDatasetWellKnown(t *testing.T) {
+	// Set up a local test server with fake data.
+	content := "alpha\nbeta\ngamma\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(content))
+	}))
+	defer srv.Close()
+
+	// Temporarily add a test dataset to the registry.
+	wellKnownDatasets["_test_resolve"] = WellKnownDataset{
+		Name:        "_test_resolve",
+		Category:    "test",
+		Description: "test dataset",
+		URL:         srv.URL + "/test.txt",
+	}
+	defer delete(wellKnownDatasets, "_test_resolve")
+
+	// Clean up any cached file first.
+	cacheDir, err := datasetCacheDir()
+	if err != nil {
+		t.Fatalf("datasetCacheDir: %v", err)
+	}
+	cached := filepath.Join(cacheDir, "_test_resolve.txt")
+	os.Remove(cached) // ignore error; file may not exist
+	t.Cleanup(func() { os.Remove(cached) })
+
+	// First call should download.
+	path, err := resolveDataset("_test_resolve")
+	if err != nil {
+		t.Fatalf("resolveDataset (first): %v", err)
+	}
+	if path != cached {
+		t.Errorf("expected cached path %s, got %s", cached, path)
+	}
+
+	// File should exist with correct content.
+	got, err := os.ReadFile(cached)
+	if err != nil {
+		t.Fatalf("reading cached file: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("cached content mismatch: got %q, want %q", string(got), content)
+	}
+
+	// Second call should hit cache (no download needed).
+	path2, err := resolveDataset("_test_resolve")
+	if err != nil {
+		t.Fatalf("resolveDataset (cached): %v", err)
+	}
+	if path2 != cached {
+		t.Errorf("expected same cached path on second call")
+	}
+}
+
+func TestResolveDatasetLiteralPath(t *testing.T) {
+	// A path that doesn't match any well-known name should be returned as-is.
+	path, err := resolveDataset("/some/file/path.txt")
+	if err != nil {
+		t.Fatalf("resolveDataset: %v", err)
+	}
+	if path != "/some/file/path.txt" {
+		t.Errorf("expected literal path, got %s", path)
+	}
+}
+
+func TestListDatasets(t *testing.T) {
+	// Just ensure listDatasets doesn't panic; output goes to stdout.
+	listDatasets()
 }

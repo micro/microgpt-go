@@ -12,13 +12,136 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/rand"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
+
+// --- Well-Known Datasets ---
+
+// WellKnownDataset describes a publicly available dataset that can be
+// downloaded on demand and cached locally for reuse.
+type WellKnownDataset struct {
+	Name        string // short identifier used with -dataset flag
+	Category    string // e.g. "names", "vocabulary", "places"
+	Description string // human-readable description
+	URL         string // download URL (must serve plain text, one entry per line)
+}
+
+// wellKnownDatasets is the registry of datasets that microgpt-go can
+// automatically download, cache, and train on. Each entry maps a short
+// name (usable with -dataset) to its metadata and download URL.
+var wellKnownDatasets = map[string]WellKnownDataset{
+	"names": {
+		Name:        "names",
+		Category:    "names",
+		Description: "32K human first names (from Karpathy's makemore)",
+		URL:         "https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt",
+	},
+	"words": {
+		Name:        "words",
+		Category:    "vocabulary",
+		Description: "370K English dictionary words",
+		URL:         "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt",
+	},
+}
+
+// datasetCacheDir returns the directory used to cache downloaded datasets.
+// It defaults to $HOME/.cache/microgpt-go/ (or os.UserCacheDir()/microgpt-go/).
+func datasetCacheDir() (string, error) {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("determining cache directory: %w", err)
+	}
+	dir := filepath.Join(base, "microgpt-go")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("creating cache directory %s: %w", dir, err)
+	}
+	return dir, nil
+}
+
+// downloadToFile downloads a URL to the given file path, returning an error
+// on failure.
+func downloadToFile(url, path string) error {
+	resp, err := http.Get(url) //nolint:gosec // URLs are from our hardcoded registry
+	if err != nil {
+		return fmt.Errorf("downloading %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("downloading %s: HTTP %d", url, resp.StatusCode)
+	}
+
+	out, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("creating %s: %w", path, err)
+	}
+	if _, err = io.Copy(out, resp.Body); err != nil {
+		out.Close()
+		os.Remove(path) // clean up partial file
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	return out.Close()
+}
+
+// resolveDataset maps a -dataset value to a concrete file path. If the value
+// matches a well-known dataset name, the dataset is downloaded (if not already
+// cached) and the cache path is returned. Otherwise the value is treated as a
+// literal file path.
+func resolveDataset(name string) (string, error) {
+	ds, ok := wellKnownDatasets[name]
+	if !ok {
+		return name, nil // treat as literal file path
+	}
+
+	cacheDir, err := datasetCacheDir()
+	if err != nil {
+		return "", err
+	}
+	cached := filepath.Join(cacheDir, ds.Name+".txt")
+
+	if info, err := os.Stat(cached); err == nil && info.Size() > 0 {
+		log.Printf("dataset %q: loaded from cache (%s)", ds.Name, cached)
+		return cached, nil
+	}
+
+	log.Printf("dataset %q: downloading %s", ds.Name, ds.URL)
+	if err := downloadToFile(ds.URL, cached); err != nil {
+		return "", err
+	}
+	if info, err := os.Stat(cached); err == nil {
+		log.Printf("dataset %q: cached to %s (%d bytes)", ds.Name, cached, info.Size())
+	} else {
+		log.Printf("dataset %q: cached to %s", ds.Name, cached)
+	}
+	return cached, nil
+}
+
+// listDatasets prints all available well-known datasets to stdout.
+func listDatasets() {
+	fmt.Println("Available well-known datasets (use with -dataset <name>):")
+	fmt.Println()
+
+	// Sort by name for deterministic output
+	names := make([]string, 0, len(wellKnownDatasets))
+	for name := range wellKnownDatasets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		ds := wellKnownDatasets[name]
+		fmt.Printf("  %-12s  [%s]  %s\n", ds.Name, ds.Category, ds.Description)
+	}
+	fmt.Println()
+	fmt.Println("Datasets are cached in ~/.cache/microgpt-go/ after first download.")
+}
 
 // --- Autograd Engine ---
 
@@ -364,21 +487,8 @@ func downloadDefaultDataset(path string) error {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		return nil
 	}
-	namesURL := "https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt"
-	resp, err := http.Get(namesURL)
-	if err != nil {
-		return fmt.Errorf("downloading dataset: %w", err)
-	}
-	defer resp.Body.Close()
-	out, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("creating %s: %w", path, err)
-	}
-	if _, err = io.Copy(out, resp.Body); err != nil {
-		out.Close()
-		return fmt.Errorf("writing %s: %w", path, err)
-	}
-	return out.Close()
+	log.Printf("dataset: downloading default names dataset to %s", path)
+	return downloadToFile(wellKnownDatasets["names"].URL, path)
 }
 
 // buildTokenizer creates a character-level tokenizer from the given documents.
@@ -688,7 +798,7 @@ func serveHTTP(addr string, rng *rand.Rand, gpt func(int, int, [][][]*Value, [][
 
 func main() {
 	// --- CLI Flags ---
-	dataset := flag.String("dataset", "input.txt", "path to training data (one entry per line), or \"-\" for stdin")
+	dataset := flag.String("dataset", "input.txt", "path to training data, or a well-known dataset name (see -list-datasets)")
 	numSteps := flag.Int("steps", 1000, "number of training steps")
 	temperature := flag.Float64("temp", 0.5, "sampling temperature (0, 1]")
 	numSamples := flag.Int("samples", 20, "number of samples to generate")
@@ -696,7 +806,13 @@ func main() {
 	loadPath := flag.String("load", "", "load model weights from this JSON file (skip training)")
 	mode := flag.String("mode", "train", "mode: train (train+infer), infer (generate only), serve (HTTP server)")
 	addr := flag.String("addr", ":8080", "address for HTTP server (used with -mode serve)")
+	showDatasets := flag.Bool("list-datasets", false, "list available well-known datasets and exit")
 	flag.Parse()
+
+	if *showDatasets {
+		listDatasets()
+		return
+	}
 
 	rng := rand.New(rand.NewSource(42)) // Let there be order among chaos
 
@@ -744,19 +860,29 @@ func main() {
 				os.Exit(1)
 			}
 		} else {
-			if err := downloadDefaultDataset(*dataset); err != nil {
+			// Resolve the dataset: well-known name -> cached path, or literal path
+			dataPath, err := resolveDataset(*dataset)
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
-			file, err := os.Open(*dataset)
+			// For literal file paths that aren't well-known, use the legacy
+			// download behaviour (downloads names.txt to input.txt if missing).
+			if dataPath == *dataset {
+				if err := downloadDefaultDataset(dataPath); err != nil {
+					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+					os.Exit(1)
+				}
+			}
+			file, err := os.Open(dataPath)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error opening %s: %v\n", *dataset, err)
+				fmt.Fprintf(os.Stderr, "Error opening %s: %v\n", dataPath, err)
 				os.Exit(1)
 			}
 			docs, err = readLines(file)
 			file.Close()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", *dataset, err)
+				fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", dataPath, err)
 				os.Exit(1)
 			}
 		}
