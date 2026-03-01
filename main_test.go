@@ -633,7 +633,8 @@ func TestResolveDatasetWellKnown(t *testing.T) {
 		t.Fatalf("datasetCacheDir: %v", err)
 	}
 	cached := filepath.Join(cacheDir, "_test_resolve.txt")
-	os.Remove(cached)
+	os.Remove(cached) // ignore error; file may not exist
+	t.Cleanup(func() { os.Remove(cached) })
 
 	// First call should download.
 	path, err := resolveDataset("_test_resolve")
@@ -661,9 +662,6 @@ func TestResolveDatasetWellKnown(t *testing.T) {
 	if path2 != cached {
 		t.Errorf("expected same cached path on second call")
 	}
-
-	// Clean up.
-	os.Remove(cached)
 }
 
 func TestResolveDatasetLiteralPath(t *testing.T) {

@@ -115,8 +115,11 @@ func resolveDataset(name string) (string, error) {
 	if err := downloadToFile(ds.URL, cached); err != nil {
 		return "", err
 	}
-	info, _ := os.Stat(cached)
-	log.Printf("dataset %q: cached to %s (%d bytes)", ds.Name, cached, info.Size())
+	if info, err := os.Stat(cached); err == nil {
+		log.Printf("dataset %q: cached to %s (%d bytes)", ds.Name, cached, info.Size())
+	} else {
+		log.Printf("dataset %q: cached to %s", ds.Name, cached)
+	}
 	return cached, nil
 }
 
