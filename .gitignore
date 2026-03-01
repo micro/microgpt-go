@@ -1,0 +1,6 @@
+# Build artifacts
+microgpt-go
+microgpt
+
+# Dataset (downloaded at runtime)
+input.txt
